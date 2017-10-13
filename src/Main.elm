@@ -32,11 +32,33 @@ type Page
     | AuthenticatingPage
 
 
+type PageMsg
+    = LoginMsg Login.Msg
+
+
 type Route
     = Login
     | App
     | NotFound
     | Authenticating
+
+
+initPageForRoute : Auth -> Route -> ( Page, Cmd PageMsg )
+initPageForRoute auth route =
+    case route of
+        Login ->
+            Login.init auth
+                |> Tuple.mapFirst LoginPage
+                |> Tuple.mapSecond (Cmd.map LoginMsg)
+
+        App ->
+            ( AppPage, Cmd.none )
+
+        NotFound ->
+            ( NotFoundPage, Cmd.none )
+
+        Authenticating ->
+            ( AuthenticatingPage, Cmd.none )
 
 
 route : Url.Parser (Route -> a) a
@@ -75,8 +97,7 @@ type alias Flags =
 
 
 type alias Model =
-    { route : Route
-    , auth : Auth
+    { auth : Auth
     , page : Page
     }
 
@@ -103,8 +124,7 @@ init flags location =
                     ( Login, NotAsked, Cmd.none )
 
         nextModel =
-            { route = nextRoute
-            , auth = Auth flags.token nextUser
+            { auth = Auth flags.token nextUser
             , page = AuthenticatingPage
             }
     in
@@ -118,6 +138,8 @@ init flags location =
 type Msg
     = UrlChange Location
     | AuthResponse Route (WebData User)
+    | SetAuth Auth
+    | RootPageMsg PageMsg
 
 
 authenticate : String -> Route -> Cmd Msg
@@ -131,7 +153,14 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
         UrlChange nextLocation ->
-            ( { model | route = parseLocation nextLocation }, Cmd.none )
+            let
+                nextRoute =
+                    parseLocation nextLocation
+
+                ( nextPage, nextPageMsg ) =
+                    initPageForRoute model.auth nextRoute
+            in
+                ( { model | page = nextPage }, Cmd.map RootPageMsg nextPageMsg )
 
         AuthResponse redirect response ->
             let
@@ -153,6 +182,48 @@ update msg model =
                 , nextCmd
                 )
 
+        SetAuth nextAuth ->
+            ( { model | auth = nextAuth }, setToken (getAuthToken nextAuth) )
+
+        RootPageMsg pageMsg ->
+            let
+                ( nextPage, nextPageCmd, outMsgs, outCmd ) =
+                    updatePage pageMsg model
+
+                nextCmds =
+                    Cmd.batch [ Cmd.map RootPageMsg nextPageCmd, outCmd ]
+            in
+                List.foldl recursiveUpdate ( { model | page = nextPage }, nextCmds ) outMsgs
+
+
+recursiveUpdate : Msg -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+recursiveUpdate msg ( model, cmd ) =
+    let
+        ( nextModel, nextCmd ) =
+            update msg model
+    in
+        ( nextModel, Cmd.batch [ cmd, nextCmd ] )
+
+
+updatePage : PageMsg -> Model -> ( Page, Cmd PageMsg, List Msg, Cmd Msg )
+updatePage pageMsg model =
+    case ( pageMsg, model.page ) of
+        ( LoginMsg subMsg, LoginPage subModel ) ->
+            let
+                props =
+                    { setAuthTagger = SetAuth }
+            in
+                Login.update props subMsg subModel
+                    |> mapPageUpdate LoginPage LoginMsg
+
+        ( _, _ ) ->
+            ( model.page, Cmd.none, [], Cmd.none )
+
+
+mapPageUpdate : (a -> Page) -> (b -> PageMsg) -> ( a, Cmd b, List Msg, Cmd Msg ) -> ( Page, Cmd PageMsg, List Msg, Cmd Msg )
+mapPageUpdate pageModelTagger pageMsgTagger ( page, pageMsgCmd, msgs, cmds ) =
+    ( pageModelTagger page, Cmd.map pageMsgTagger pageMsgCmd, msgs, cmds )
+
 
 
 ---- VIEW ----
@@ -160,30 +231,37 @@ update msg model =
 
 view : Model -> Html Msg
 view model =
-    case model.route of
-        Login ->
-            Login.view model.auth {}
+    viewPage model
+        |> Html.map RootPageMsg
+
+
+viewPage : Model -> Html PageMsg
+viewPage model =
+    case model.page of
+        LoginPage pageModel ->
+            Login.view model.auth pageModel
+                |> Html.map LoginMsg
 
         _ ->
             div []
-                [ div [] [ text (routeToString model.route) ]
+                [ div [] [ text (pageToString model.page) ]
                 , a [ href "#/login" ] [ text "to login" ]
                 ]
 
 
-routeToString : Route -> String
-routeToString route =
-    case route of
-        App ->
+pageToString : Page -> String
+pageToString page =
+    case page of
+        AppPage ->
             "app"
 
-        Login ->
+        LoginPage _ ->
             "login"
 
-        NotFound ->
+        NotFoundPage ->
             "not found"
 
-        Authenticating ->
+        AuthenticatingPage ->
             "loading"
 
 

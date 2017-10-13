@@ -1,4 +1,4 @@
-module Api exposing (get)
+module Api exposing (get, post)
 
 import Http
 import Json.Decode exposing (Decoder)
@@ -9,6 +9,11 @@ import Config exposing (makeApiUrl)
 get : String -> String -> Decoder a -> Http.Request a
 get token url decoder =
     request "GET" token url decoder Nothing
+
+
+post : String -> Value -> String -> Decoder a -> Http.Request a
+post token payload url decoder =
+    request "POST" token url decoder (Just payload)
 
 
 request : String -> String -> String -> Decoder a -> Maybe Value -> Http.Request a
